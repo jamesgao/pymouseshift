@@ -18,10 +18,10 @@ class ClientDB(object):
         self.db = json.load(open(jspath, "r"))
 
     def __contains__(self, client):
-        if isinstance(client, Client):
+        try:
             return (client.hostname, client.token) in self.db
-        return (client['hostname'], client['token']) in self.db
-
+        except AttributeError:
+            return (client['hostname'], client['token']) in self.db
 
     def get_client(self, hostname, token):
         desc = self.db[(hostname, token)]
@@ -47,7 +47,7 @@ if not os.path.exists(config_dir):
 if not os.path.exists(dbpath):
     json.dump({}, open(dbpath, "w"))
 if not os.path.exists(confpath):
-    json.dump(dict(token=secrets.token_hex(64), last_address=""), open(confpath, "w"))
+    json.dump(dict(token=secrets.token_urlsafe(), last_address=""), open(confpath, "w"))
 
 config = json.load(open(confpath))
 db = ClientDB(dbpath)

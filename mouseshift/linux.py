@@ -24,27 +24,19 @@ class LinuxServer(Server):
 
         #get mouse capabilities to forward to absolute device
         caps = self.mouse.capabilities()
-        #delete syn, gets added automatically by evdev
         del caps[evdev.ecodes.EV_SYN]
-        #remove the rel_x and rel_y
-        #caps[evdev.ecodes.EV_REL].remove(evdev.ecodes.REL_X)
-        #caps[evdev.ecodes.EV_REL].remove(evdev.ecodes.REL_Y)
-        #add absolute axes
-        # caps[evdev.ecodes.EV_ABS] = [
-        #     (evdev.ecodes.ABS_X, evdev.AbsInfo(0, 0, resolution[0], 0, 0, 0)),
-        #     (evdev.ecodes.ABS_Y, evdev.AbsInfo(0, 0, resolution[1], 0, 0, 0))]
 
         #merge keyboard and mouse capabilities for transfer
-        self.caps = dict(caps)
+        self.capabilities = dict(caps)
         for kbd in self.keyboards:
             kcap = kbd.capabilities()
             for k, v in kcap.items():
                 if k == evdev.ecodes.EV_SYN:
                     continue
-                elif k not in self.caps:
-                    self.caps[k] = v
+                elif k not in self.capabilities:
+                    self.capabilities[k] = v
                 else:
-                    self.caps[k].extend(v)
+                    self.capabilities[k].extend(v)
         
         self.dev = evdev.UInput(caps)
         self._set_dconf()
@@ -101,13 +93,22 @@ class LinuxClient(Client):
         self.dev = None
 
     async def connect(self, server):
-        await super(LinuxClient, self).connect(server, resolution)
-        self.dev = evdev.UInput(self.caps)
+        caps = await super(LinuxClient, self).connect(server, resolution)
+        self.capabilities = dict((int(k), v) for k, v in caps.items())
+        self.dev = evdev.UInput(self.capabilities)
+        logger.debug(f'Received capabilities: {self.capabilities}')
         await self.handle_event()
 
     async def handle_event(self):
-        async for ev in super(LinuxClient, self).handle_event():
-            self.dev.write(ev['type'], ev['code'], ev['value'])
+        while True:
+            ev = await self.handle_heartbeat()
+            try:
+                if ev['type'] == enums.SYN_REPORT:
+                    self.dev.syn()
+                else:
+                    self.dev.write(ev['type'], ev['code'], ev['value'])
+            except KeyError:
+                logger.debug(f'Invalid event: {ev}')
 
 
 def find_devs():

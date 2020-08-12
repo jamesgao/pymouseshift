@@ -207,15 +207,20 @@ def confirm_client(server, client, reader, writer):
         message_type=Gtk.MessageType.QUESTION,
         buttons=Gtk.ButtonsType.YES_NO,
         text='New unknown client')
+    hostname, token = client['hostname'], client['token']
     dialog.format_secondary_text(
-        f'Client "{client['hostname']}" with token {client['token']} is trying to connect, allow?')
+        f'Client "{hostname}" with token {token} is trying to connect, allow?')
 
     def response(widget, resp):
         if resp == Gtk.ResponseType.YES:
-            server.confirm_client(client, reader, writer)
+            logger.debug(f'Responded yes: {server}, {server.loop}')
+            coro = server.add_client(client, reader, writer)
+            future = asyncio.run_coroutine_threadsafe(coro, server.loop)
         else:
-            server.deny_client(client, reader, writer)
+            coro = server.deny_client(client, reader, writer)
+            future = asyncio.run_coroutine_threadsafe(coro, server.loop)
 
+        future.result()
         widget.destroy()
 
     dialog.connect('response', response)
