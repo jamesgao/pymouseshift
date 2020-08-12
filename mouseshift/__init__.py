@@ -33,7 +33,7 @@ class ClientDB(object):
             token=client.token,
             topleft=(client.xlim[0],client.ylim[0]),
             bottomright=(client.xlim[1],client.ylim[1]))
-        self.save()
+        #self.save()
 
     def save(self):
         json.dump(self.db, open(self.jspath, "w"))

@@ -39,9 +39,9 @@ class Server(object):
         self.clients = []
 
         self._last_screen = False
-        self.local_event(Event(enums.EV_REL, enums.REL_X, -screen[0]))
-        self.local_event(Event(enums.EV_REL, enums.REL_Y, -screen[1]))
-        self.local_event(Event(enums.SYN_REPORT, 0, 0))
+        # self.local_event(Event(enums.EV_REL, enums.REL_X, -screen[0]))
+        # self.local_event(Event(enums.EV_REL, enums.REL_Y, -screen[1]))
+        # self.local_event(Event(enums.SYN_REPORT, 0, 0))
 
         self.sslcontext = ssl.SSLContext()
 
@@ -84,11 +84,12 @@ class Server(object):
         self.clients.append(client)
         #Add the absolute axes to the capabilities
         caps = dict(self.capabilities)
-        caps[enums.EV_REL].remove(enums.REL_X)
-        caps[enums.EV_REL].remove(enums.REL_Y)
+        #caps[enums.EV_REL].remove(enums.REL_X)
+        #caps[enums.EV_REL].remove(enums.REL_Y)
         caps[enums.EV_ABS] = [
             (enums.ABS_X, (0,0,client.xrange,0,0,0)),
             (enums.ABS_Y, (0,0,client.yrange,0,0,0))]
+
         logger.debug(f'Sending capabilities to client: {caps}')
         await _xfer(writer, caps)
         logger.info(f"Client {client.hostname} connected")
@@ -124,16 +125,16 @@ class Server(object):
         elif x < self.buffer_size[0]:
             x = self.buffer_size[0]
 
-        dx = x - self.pos[0]
+        #dx = x - self.pos[0]
         self.pos[0] = x
 
         if self.offscreen:
             #position gets recomputed by send_event
-            await self.send_event(Event(enums.EV_REL, enums.REL_X, dx))
+            await self.send_event(Event(enums.EV_REL, enums.REL_X, x))
         else:
-            #x = int(clamp(self.pos[0], 0, self.screen[0]))
-            #self.local_event(Event(enums.EV_ABS, enums.ABS_X, x))
-            self.local_event(Event(enums.EV_REL, enums.REL_X, dx))
+            x = int(clamp(self.pos[0], 0, self.screen[0]))
+            self.local_event(Event(enums.EV_ABS, enums.ABS_X, x))
+            #self.local_event(Event(enums.EV_REL, enums.REL_X, dx))
 
     async def move_y(self, y):
         y = self.pos[1] + int(y * self.accel)
@@ -143,15 +144,15 @@ class Server(object):
         elif y < self.buffer_size[1]:
             y = self.buffer_size[1]
 
-        dy = y - self.pos[1]
+        #dy = y - self.pos[1]
         self.pos[1] = y
 
         if self.offscreen:
-            await self.send_event(Event(enums.EV_REL, enums.REL_Y, dy))
+            await self.send_event(Event(enums.EV_REL, enums.REL_Y, y))
         else:
-            #y = int(clamp(self.pos[1], 0, self.screen[1]))
-            #self.local_event(Event(enums.EV_ABS, enums.ABS_Y, y))
-            self.local_event(Event(enums.EV_REL, enums.REL_Y, dy))
+            y = int(clamp(self.pos[1], 0, self.screen[1]))
+            self.local_event(Event(enums.EV_ABS, enums.ABS_Y, y))
+            #self.local_event(Event(enums.EV_REL, enums.REL_Y, dy))
 
     async def handle_keyboard(self, event):
         if self.offscreen:

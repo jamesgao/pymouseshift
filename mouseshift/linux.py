@@ -26,6 +26,13 @@ class LinuxServer(Server):
         caps = self.mouse.capabilities()
         del caps[evdev.ecodes.EV_SYN]
 
+        #modify caps to delete relative axes and add absolute axes
+        caps[enums.EV_REL].remove(enums.REL_X)
+        caps[enums.EV_REL].remove(enums.REL_Y)
+        caps[enums.EV_ABS] = [
+            (enums.ABS_X, (0,0,resolution[0],0,0,0)),
+            (enums.ABS_Y, (0,0,resolution[1],0,0,0))]
+
         #merge keyboard and mouse capabilities for transfer
         self.capabilities = dict(caps)
         for kbd in self.keyboards:
@@ -39,8 +46,7 @@ class LinuxServer(Server):
                     self.capabilities[k].extend(v)
         
         self.dev = evdev.UInput(caps)
-        self._set_dconf()
-
+        
         super(LinuxServer, self).__init__((resolution[0], resolution[1]))
 
     async def serve(self):
@@ -50,21 +56,7 @@ class LinuxServer(Server):
             task = asyncio.create_task(self.readkbd(kbd))
             self.task_kbds.append(task)
 
-        try:
-            await super(LinuxServer, self).serve()
-        except:
-            self._unset_dconf()
-
-    def _set_dconf(self):
-        self._mouse_settings = Gio.Settings.new('org.gnome.desktop.peripherals.mouse')
-        self._mouse_speed = self._mouse_settings.get_value('speed')
-        self._mouse_accel = self._mouse_settings.get_value('accel-profile')
-        self._mouse_settings.set_value('speed', GLib.Variant.new_double(0))
-        self._mouse_settings.set_value('accel-profile', GLib.Variant.new_string('flat'))
-
-    def _unset_dconf(self):
-        self._mouse_settings.set_value('speed', self._mouse_speed)
-        self._mouse_settings.set_value('accel-profile', self._mouse_accel)
+        await super(LinuxServer, self).serve()
 
     def grab_keyboard(self, grabbed=True):
         for kbd in self.keyboards:
