@@ -202,6 +202,14 @@ class ServerScreen(Gtk.Fixed):
         bottom = position[1] - (self.position[1] + self.height)
         return top, right, bottom, left
 
+def confirm_server(server, client, reader, writer):
+    dialog = Gtk.MessageDialog(
+        message_type=Gtk.MessageType.QUESTION,
+        buttons=Gtk.ButtonsType.YES_NO,
+        text='New unknown server')
+    dialog.format_secondary_text(
+        f'Connecting to new server with certificate hash {certhash}, proceed?')
+
 def confirm_client(server, client, reader, writer):
     dialog = Gtk.MessageDialog(
         message_type=Gtk.MessageType.QUESTION,
@@ -226,7 +234,7 @@ def confirm_client(server, client, reader, writer):
     dialog.connect('response', response)
     dialog.show()
 
-async def connect_dialog(default_addr=config['last_address']):
+def connect_dialog(default_addr=config['last_address']):
     dialog = Gtk.MessageDialog(
         message_type=Gtk.MessageType.QUESTION,
         buttons=Gtk.ButtonsType.OK_CANCEL,
@@ -239,7 +247,7 @@ async def connect_dialog(default_addr=config['last_address']):
     box.pack_end(entry, False, False, 0)
 
     dialog.show_all()
-    response = await dialog.run()
+    response = dialog.run()
     text = entry.get_text() 
     dialog.destroy()
     if response == Gtk.ResponseType.OK:

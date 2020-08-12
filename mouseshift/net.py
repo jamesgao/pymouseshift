@@ -1,3 +1,4 @@
+import os
 import asyncio
 import json
 import socket
@@ -7,9 +8,10 @@ import ssl
 import logging
 logger = logging.getLogger(__name__)
 
+from OpenSSL import crypto
 from gi.repository import GLib
 
-from . import db, config, enums, clamp, Event, ui
+from . import db, config, config_dir, cert_dir, enums, clamp, Event, ui, gen_cert
 
 PORT = 8975
 
@@ -32,6 +34,7 @@ class Server(object):
     """Abstract base class for different platforms
     Implements the basic server algorithm to shuffle the mouse pointer between clients and the local server"""
     def __init__(self, screen, accel=1.8):
+        self.name = socket.gethostname()
         self.accel = accel
         self.pos = [0, 0]
         self.screen = screen
@@ -39,14 +42,15 @@ class Server(object):
         self.clients = []
 
         self._last_screen = False
-        # self.local_event(Event(enums.EV_REL, enums.REL_X, -screen[0]))
-        # self.local_event(Event(enums.EV_REL, enums.REL_Y, -screen[1]))
-        # self.local_event(Event(enums.SYN_REPORT, 0, 0))
 
-        self.sslcontext = ssl.SSLContext()
+        self.cert_path = os.path.join(config_dir, f'{self.name}.crt')
+        self.sslctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        kpath = os.path.join(config_dir, f'{self.name}.key')
+        self.sslctx.load_cert_chain(certfile=self.cert_path, keyfile=kpath)
+        #self.sslctx = None
 
     async def serve(self):
-        server = await asyncio.start_server(self.client_connect, '0.0.0.0', PORT)
+        server = await asyncio.start_server(self.client_connect, '0.0.0.0', PORT, ssl=self.sslctx)
         self.hbtask = asyncio.create_task(self.heartbeat())
 
         logger.info(f'Starting server on {server.sockets[0].getsockname()}')
@@ -54,17 +58,21 @@ class Server(object):
             await server.serve_forever()
 
     async def client_connect(self, reader, writer):
-        client = await _recv(reader)
-        logger.debug(f"Client {client['hostname']} connecting...")
         try:
-            client = db.get_client(client['hostname'], client['token'])
-            await self.add_client(client, reader, writer)
-        except KeyError:
-            #New client, confirm with user that it's ok first
-            res = client['resolution']
-            client['topleft'] = self.buffer_size[2], 0
-            client['bottomright'] = self.buffer_size[2]+res[0], res[1]
-            GLib.idle_add(ui.confirm_client, self, client, reader, writer)
+            client = await _recv(reader)
+            try:
+                logger.debug(f"Client {client['hostname']} connecting...")
+                client = db.get_client(client['hostname'], client['token'])
+                await self.add_client(client, reader, writer)
+            except KeyError:
+                #New client, confirm with user that it's ok first
+                res = client['resolution']
+                client['topleft'] = self.buffer_size[2], 0
+                client['bottomright'] = self.buffer_size[2]+res[0], res[1]
+                GLib.idle_add(ui.confirm_client, self, client, reader, writer)
+        except json.decoder.JSONDecodeError:
+            #probably just a cert query, ignore
+            pass
 
     async def add_client(self, client, reader, writer):
         client = Client(**client)
@@ -237,6 +245,9 @@ class Client(object):
         if topleft is not None:
             self.position(topleft, bottomright)
 
+        self.sslctx = ssl.create_default_context(capath=cert_dir)
+        #self.sslctx = None
+
     def __contains__(self, pos):
         return (
             self.xlim[0] < pos[0] and pos[0] < self.xlim[1] and
@@ -250,7 +261,20 @@ class Client(object):
 
     async def connect(self, server, resolution):
         logger.info(f"Connecting to {server}")
-        reader, writer = await asyncio.open_connection(server, PORT)
+        try:
+            reader, writer = await asyncio.open_connection(server, PORT, ssl=self.sslctx)
+        except Exception as e:
+            logger.debug(e)
+            #download server certificate and store
+            certstr = ssl.get_server_certificate((server, PORT))
+            cert = crypto.load_certificate(crypto.FILETYPE_PEM, certstr)
+            certpath = hex(cert.subject_name_hash())[2:]
+            certpath = os.path.join(cert_dir, certpath+".0")
+            with open(certpath, "wt") as fp:
+                fp.write(certstr)
+            #try connecting again
+            reader, writer = await asyncio.open_connection(server, PORT, ssl=self.sslctx)
+
         metadata = dict(hostname=self.hostname, 
             token=self.token, 
             resolution=resolution)
