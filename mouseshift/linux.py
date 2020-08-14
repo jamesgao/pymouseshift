@@ -5,7 +5,6 @@ import evdev
 
 import logging
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
 
 from . import enums
 from .net import Server, Client
@@ -17,7 +16,7 @@ from gi.repository import Gtk, Gdk, Gio, GLib
 resolution = Gdk.Screen.width(), Gdk.Screen.height()
 
 class LinuxServer(Server):
-    def __init__(self, mouse="/dev/input/event4", keyboards=["/dev/input/event2"]):
+    def __init__(self, mouse, keyboards, **kwargs):
         self.mouse = evdev.InputDevice(mouse)
         self.keyboards = [evdev.InputDevice(kbd) for kbd in keyboards]
         self.mouse.grab()
@@ -26,7 +25,7 @@ class LinuxServer(Server):
         caps = self.mouse.capabilities()
         del caps[evdev.ecodes.EV_SYN]
 
-        #modify caps to delete relative axes and add absolute axes
+        #modify capabilities to delete relative axes and add absolute axes
         caps[enums.EV_REL].remove(enums.REL_X)
         caps[enums.EV_REL].remove(enums.REL_Y)
         caps[enums.EV_ABS] = [
@@ -46,8 +45,8 @@ class LinuxServer(Server):
                     self.capabilities[k].extend(v)
         
         self.dev = evdev.UInput(caps)
-        
-        super(LinuxServer, self).__init__((resolution[0], resolution[1]))
+
+        super(LinuxServer, self).__init__(resolution, **kwargs)
 
     async def serve(self):
         self.task_mouse = asyncio.create_task(self.readmouse())
@@ -79,21 +78,36 @@ class LinuxServer(Server):
         async for ev in keyboard.async_read_loop():
             await self.handle_keyboard(ev)
 
+    def stop(self):
+        logger.info("Shutting down server")
+        super(LinuxServer, self).stop()
+        self.mouse.ungrab()
+        self.task_mouse.cancel()
+        for task in self.task_kbds:
+            task.cancel()
+
 class LinuxClient(Client):
     def __init__(self, **kwargs):
         super(LinuxClient, self).__init__(**kwargs)
         self.dev = None
+        self.running = True
 
     async def connect(self, server):
         caps = await super(LinuxClient, self).connect(server, resolution)
-        self.capabilities = dict((int(k), v) for k, v in caps.items())
-        self.dev = evdev.UInput(self.capabilities)
-        logger.debug(f'Received capabilities: {self.capabilities}')
-        await self.handle_event()
+        #caps may be None if user rejects server cert request
+        if caps is not None:
+            self.capabilities = dict((int(k), v) for k, v in caps.items())
+            self.dev = evdev.UInput(self.capabilities)
+            logger.debug(f'Received capabilities: {self.capabilities}')
+            await self.handle_event()
 
     async def handle_event(self):
-        while True:
-            ev = await self.handle_heartbeat()
+        while self.running:
+            try:
+                ev = await self.handle_heartbeat()
+            except json.decoder.JSONDecodeError:
+                #No json received, quit out of loop
+                self.running = False
             try:
                 if ev['type'] == enums.SYN_REPORT:
                     self.dev.syn()
@@ -102,6 +116,8 @@ class LinuxClient(Client):
             except KeyError:
                 logger.debug(f'Invalid event: {ev}')
 
+    def stop(self):
+        self.running = False
 
 def find_devs():
     mouse = None
@@ -114,18 +130,6 @@ def find_devs():
             keyboard.append(dev.path)
     return mouse, keyboard
 
-def run_server():
+def make_server(**kwargs):
     mouse, keyboards = find_devs()
-    kvm = LinuxServer(mouse, keyboards)
-    def threadloop():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        kvm.loop = loop
-        loop.run_until_complete(kvm.serve())
-        loop.run_forever()
-    import threading
-    threading.Thread(target=threadloop).start()
-
-def run_client(server="10.1.1.2"):
-    kvm = LinuxClient()
-    asyncio.run(kvm.connect(server))
+    return LinuxServer(mouse, keyboards, **kwargs)

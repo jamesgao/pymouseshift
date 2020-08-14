@@ -10,17 +10,12 @@ import asyncio
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk
-import pystray
-import PIL.Image
 
-config = dict(last_address="")
-
-icon_path = os.path.abspath(os.path.split(__file__)[0])
-icon_empty = PIL.Image.open(os.path.join(icon_path, "mouse.png"))
-icon_filled = PIL.Image.open(os.path.join(icon_path, "mouse_fill.png"))
+from . import db
 
 class ServerPrefs(Gtk.Window):
-    def __init__(self, icon, item, mainwidth=300):
+    def __init__(self, app, mainwidth=300):
+        self.app = app
         self.resolution = Gdk.Screen.width(), Gdk.Screen.height()
         self.hostname = socket.gethostname()
         super(ServerPrefs, self).__init__(title="pymouseshift Screen Arrangement")
@@ -39,20 +34,42 @@ class ServerPrefs(Gtk.Window):
             width=mainwidth,
             aspect=aspect,
             resizeable=False)
+        
+        self._scale = mainwidth / self.resolution[0] 
 
-        self.screens = [self.main]
+        self.screens = {self.main:None}
         self.add_events(Gdk.EventMask.POINTER_MOTION_MASK)
         self.show_all()
 
-    def add_client(self, name, resolution, position):
-        width = resolution[0] / self.resolution[0] * 384
-        aspect = resolution[0] / resolution[1]
-        client = ServerScreen(self, name, '{}x{}'.format(*resolution), 
+    def add_client(self, client):
+        #rescale position to the visible area
+        position = client.xlim[0]*self._scale, client.ylim[0]*self._scale
+        width = client.xrange * self._scale
+        aspect = client.xrange / client.yrange
+
+        subtext = ''
+        if client.resolution is not None:
+            subtext = f'{client.resolution[0]}x{client.resolution[1]}'
+
+        screen = ServerScreen(self, client.hostname, 
+            subtext, 
             position=position, 
             width=width, 
             aspect=aspect)
         self.show_all()
-        self.screens.append(client)
+        self.screens[screen] = client
+
+    def update(self, screen, position, width):
+        x = int(position[0] / self._scale)
+        y = int(position[1] / self._scale)
+        width /= self._scale
+        height = width / screen.aspect
+        logger.info(f'Updating screen {screen.name} to ({x},{y}), width {width}')
+
+        client = self.screens[screen]
+        client.position((x, y), (x+width, y+height))
+        self.app.server.update_buffer()
+        db.update_client(client)    
 
     def put(self, client):
         x = client.position[0] + self.origin[0]
@@ -63,7 +80,7 @@ class ServerPrefs(Gtk.Window):
         self.fixed.move(client, x+self.origin[0], y+self.origin[1])
 
     def collide_position(self, client, x, y):
-        for screen in self.screens:
+        for screen in self.screens.keys():
             if screen != client:
                 top, right, bottom, left = screen.collide((x, y), client.width, client.height)
                 m = max(top, max(right, max(bottom, left)))
@@ -79,7 +96,7 @@ class ServerPrefs(Gtk.Window):
         return x, y
 
     def collide_width(self, client, width, height):
-        for screen in self.screens:
+        for screen in self.screens.keys():
             if screen != client:
                 top, right, bottom, left = screen.collide(client.position, width, height)
                 m = max(top, max(right, max(bottom, left)))
@@ -153,7 +170,7 @@ class ServerScreen(Gtk.Fixed):
         else:
             self.screen.connect('motion-notify-event', self.pan_server)
 
-        logging.info(f'Adding host {name} at ({self.position[0]}, {self.position[1]})')
+        logger.debug(f'Adding host {name} at ({self.position[0]}, {self.position[1]})')
         self.server.put(self)
 
     @property
@@ -173,7 +190,7 @@ class ServerScreen(Gtk.Fixed):
         x = self.position[0] + event.x_root - self._start[0]
         y = self.position[1] + event.y_root - self._start[1]
         self.position = self.server.collide_position(self, x, y)
-        logging.info(f'Moved client {self.name} to ({x}, {y})')
+        self.server.update(self, self.position, self.width)
 
     def drag_corner(self, widget, event):
         width = self.width + event.x_root - self._start[0]
@@ -188,7 +205,7 @@ class ServerScreen(Gtk.Fixed):
         height = width / self.aspect
         width, height = self.server.collide_width(self, width, height)
         self.width = width
-        logging.info(f'Resized client {self.name} to {width}x{height}')
+        self.server.update(self, self.position, self.width)
 
     def pan_server(self, widget, event):
         x = event.x_root - self._start[0]
@@ -202,99 +219,48 @@ class ServerScreen(Gtk.Fixed):
         bottom = position[1] - (self.position[1] + self.height)
         return top, right, bottom, left
 
-def confirm_server(server, client, reader, writer):
-    dialog = Gtk.MessageDialog(
-        message_type=Gtk.MessageType.QUESTION,
-        buttons=Gtk.ButtonsType.YES_NO,
-        text='New unknown server')
-    dialog.format_secondary_text(
-        f'Connecting to new server with certificate hash {certhash}, proceed?')
-
-def confirm_client(server, client, reader, writer):
-    dialog = Gtk.MessageDialog(
-        message_type=Gtk.MessageType.QUESTION,
-        buttons=Gtk.ButtonsType.YES_NO,
-        text='New unknown client')
-    hostname, token = client['hostname'], client['token']
-    dialog.format_secondary_text(
-        f'Client "{hostname}" with token {token} is trying to connect, allow?')
-
-    def response(widget, resp):
-        if resp == Gtk.ResponseType.YES:
-            logger.debug(f'Responded yes: {server}, {server.loop}')
-            coro = server.add_client(client, reader, writer)
-            future = asyncio.run_coroutine_threadsafe(coro, server.loop)
-        else:
-            coro = server.deny_client(client, reader, writer)
-            future = asyncio.run_coroutine_threadsafe(coro, server.loop)
-
-        future.result()
-        widget.destroy()
-
-    dialog.connect('response', response)
-    dialog.show()
-
-def connect_dialog(default_addr=config['last_address']):
+def connect_dialog(callback):
     dialog = Gtk.MessageDialog(
         message_type=Gtk.MessageType.QUESTION,
         buttons=Gtk.ButtonsType.OK_CANCEL,
         text="Connect to server")
     dialog.set_title("pymouseshift client")
 
+
     box = dialog.get_content_area()
     entry = Gtk.Entry()
     entry.set_size_request(250,0)
+    def submit(widget):
+        callback(entry.get_text())
+        dialog.destroy()
+    entry.connect('activate', submit)
     box.pack_end(entry, False, False, 0)
 
+    def okbutton(widget, resp):
+        if resp == Gtk.ResponseType.OK:
+            callback(entry.get_text())
+        dialog.destroy()
+    dialog.connect('response', okbutton)
     dialog.show_all()
-    response = dialog.run()
-    text = entry.get_text() 
-    dialog.destroy()
-    if response == Gtk.ResponseType.OK:
-        return text
-    else:
-        return None
 
-def server():
-    def quit(icon, item):
-        icon.stop()
+def confirm_dialog(msg, confirm, cancel=None, title='New pymouseshift Client'):
+    dialog = Gtk.MessageDialog(
+        message_type=Gtk.MessageType.QUESTION,
+        buttons=Gtk.ButtonsType.YES_NO,
+        text=title)
+    dialog.format_secondary_markup(msg)
 
-    menu = pystray.Menu(
-        pystray.MenuItem("pymouseshift", ServerPrefs),
-        pystray.MenuItem("Quit", quit))
-    systray = pystray.Icon("pymouseshift", icon_empty, menu=menu)
-    return systray
-
-def client():
-    def quit(icon, item):
-        icon.stop()
-
-    def connect(icon, item):
-        print(connect_dialog())
-
-    def disconnect(icon, item):
-        icon.menu = disconnect_menu
-        icon.update_menu()
-
-    disconnect_menu = pystray.Menu(
-        pystray.MenuItem("Connect...", connect),
-        pystray.MenuItem("Quit", quit))
-    connected_menu = pystray.Menu(
-        pystray.MenuItem("Disconnect", disconnect),
-        pystray.MenuItem("Quit", quit))
-        
-    systray = pystray.Icon("pymouseshift", icon_empty, 
-        title="pymouseshift Client",
-        menu=disconnect_menu)
-    return systray
+    def callback(widget, resp):
+        if resp == Gtk.ResponseType.YES:
+            confirm()
+        elif cancel is not None:
+            cancel()
+        widget.destroy()
+    dialog.connect('response', callback)
+    dialog.show()
 
 if __name__ == "__main__":
-    # systray = server()
-    # try:
-    #     systray.run()
-    # except AttributeError:
-    #     pass
-    server = ServerPrefs(None, None)
+    server = ServerPrefs()
     server.connect('destroy', Gtk.main_quit)
     server.add_client("corvus", (1920, 1200), position=[300, 0])
     server.add_client("lyra", (1920, 1200), position=[-100, 0])
