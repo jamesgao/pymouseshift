@@ -1,12 +1,12 @@
 # pymouseshift
-![Tray icon](https://github.com/jamesgao/pymouseshift/raw/master/screenshot_tray.png)
+<img align="right" width="308" height="252" src="https://github.com/jamesgao/pymouseshift/raw/master/screenshot_tray.png">
 pymouseshift is a program that lets you move your mouse cursor across multiple machines. It has similar functionality as [Synergy](https://symless.com/synergy).
 
 pymouseshift works with Wayland on Linux. It does this by hijacking the mouse altogether. It computes where the mouse lies on each screen, and forwards the correct coordinates via [UInput](https://www.kernel.org/doc/html/v4.12/input/uinput.html) and [python-evdev](https://python-evdev.readthedocs.io/en/latest/).
 
 ## Features
-- SSL encryption of traffic between computers: ![SSL encryption](https://github.com/jamesgao/pymouseshift/raw/master/screenshot_ssl.png)
-- GUI configuration of screen sizes and positions: ![GUI configuration](https://github.com/jamesgao/pymouseshift/raw/master/screenshot_pref.png)
+- SSL encryption of traffic between computers: <img align="right" width="200" src="https://github.com/jamesgao/pymouseshift/raw/master/screenshot_ssl.png">
+- GUI configuration of screen sizes and positions: <img align="right" width="200" src="https://github.com/jamesgao/pymouseshift/raw/master/screenshot_pref.png">
 - Remembers clients and their positions
 
 ## TODO
